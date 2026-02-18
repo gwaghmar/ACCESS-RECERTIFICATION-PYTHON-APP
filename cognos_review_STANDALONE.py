@@ -530,6 +530,23 @@ class ConfigurationError(CognosReviewError):
 # LOGGING SETUP
 # ============================================================================
 
+def _get_log_path() -> Path:
+    """Get a writable path for the log file, falling back gracefully."""
+    candidates = [
+        Path(os.path.dirname(os.path.abspath(__file__))) / FileNames.LOG_FILE,
+        Path.home() / ".cognos_review" / FileNames.LOG_FILE,
+        Path(os.environ.get("TEMP", os.environ.get("TMP", "."))) / FileNames.LOG_FILE,
+    ]
+    for path in candidates:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+            return path
+        except (PermissionError, OSError):
+            continue
+    return Path(FileNames.LOG_FILE)
+
+
 def setup_logging() -> logging.Logger:
     log_formatter = logging.Formatter(
         '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -538,11 +555,15 @@ def setup_logging() -> logging.Logger:
     _logger = logging.getLogger("cognos_review")
     _logger.setLevel(logging.INFO)
     if not _logger.handlers:
-        file_handler = RotatingFileHandler(
-            FileNames.LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8'
-        )
-        file_handler.setFormatter(log_formatter)
-        _logger.addHandler(file_handler)
+        try:
+            log_path = _get_log_path()
+            file_handler = RotatingFileHandler(
+                str(log_path), maxBytes=5 * 1024 * 1024, backupCount=3, encoding='utf-8'
+            )
+            file_handler.setFormatter(log_formatter)
+            _logger.addHandler(file_handler)
+        except (PermissionError, OSError):
+            pass  # Console-only if all file paths fail
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(log_formatter)
