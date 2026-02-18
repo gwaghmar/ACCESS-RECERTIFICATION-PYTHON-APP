@@ -1426,6 +1426,7 @@ class FileProcessor:
 
             assigned_indices = set()
             total_files = len(file_to_agencies)
+            total_rows_written = 0
 
             for file_idx, (file_name, agencies) in enumerate(file_to_agencies.items()):
                 if progress_callback:
@@ -1433,7 +1434,11 @@ class FileProcessor:
                 user_count = self._generate_single_file(df_master, agency_col, file_name, agencies, output_dir, assigned_indices)
                 report.total_files_created += 1
                 report.file_details.append({"file_name": file_name, "agencies": agencies, "user_count": user_count})
-                report.total_generated_users += user_count
+                total_rows_written += user_count
+
+            # Use assigned_indices for unique user count (a user mapped in multiple
+            # files/tabs is still one unique user from the master file)
+            report.total_generated_users = len(assigned_indices)
 
             if progress_callback:
                 progress_callback(0.85, "Processing unmapped users...")
@@ -1469,12 +1474,20 @@ class FileProcessor:
                     self._create_individual_unmapped_files(df_unassigned, agency_col, output_dir)
                 elif handle_unmapped == "single":
                     self._create_unassigned_file(df_unassigned, output_dir)
+                # Recalculate after handling unmapped
+                report.total_generated_users = len(assigned_indices)
+                report.unmapped_users = len(set(df_master.index) - assigned_indices)
 
             # Verify counts
             if report.total_master_users != (report.total_generated_users + report.unmapped_users):
                 report.discrepancies.append(
                     f"User count mismatch: Master has {report.total_master_users}, "
                     f"generated {report.total_generated_users}, unmapped {report.unmapped_users}"
+                )
+            if total_rows_written > report.total_generated_users:
+                self._logger.info(
+                    f"Note: {total_rows_written} total rows written across files "
+                    f"({report.total_generated_users} unique users — some appear in multiple files)"
                 )
 
             if progress_callback:
@@ -2764,12 +2777,13 @@ Keyboard Shortcuts:
             self.after(0, self._auto_scan_output, self.vars["output"].get())
             self.after(0, self.show_progress, False)
 
+            accounted = report.total_generated_users + report.unmapped_users
             summary = (
                 f"Generation Complete!\n\n"
                 f"Files Created: {report.total_files_created}\n"
-                f"Total Users: {report.total_generated_users}\n"
+                f"Unique Users Mapped: {report.total_generated_users}\n"
                 f"Unmapped Users: {report.unmapped_users}\n"
-                f"Master Total: {report.total_master_users}\n"
+                f"Total Accounted: {accounted} / {report.total_master_users}\n"
             )
             if report.discrepancies:
                 summary += "\nDiscrepancies:\n" + "\n".join(f"  - {d}" for d in report.discrepancies)
