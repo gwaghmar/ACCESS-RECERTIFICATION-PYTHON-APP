@@ -1504,12 +1504,29 @@ class FileProcessor:
             raise FileProcessingError(f"File generation failed: {e}")
 
     def _generate_single_file(self, df_master, agency_col, file_name, agencies, output_dir, assigned_indices) -> int:
-        agency_alternatives = "|".join([f"^{re.escape(ag.strip())}$" for ag in agencies])
-        agency_pattern = f"(?i)({agency_alternatives})"
-        matched = df_master[df_master[agency_col].astype(str).str.match(agency_pattern, na=False)]
+        # Normalize: strip whitespace, non-breaking spaces, and invisible chars from both sides
+        clean_agencies = [re.sub(r'[\s\xa0]+', ' ', ag).strip() for ag in agencies]
+        master_cleaned = df_master[agency_col].astype(str).apply(lambda x: re.sub(r'[\s\xa0]+', ' ', x).strip())
+
+        # Build lookup set for fast case-insensitive matching
+        agency_upper_set = {a.upper() for a in clean_agencies}
+        matched = df_master[master_cleaned.str.upper().isin(agency_upper_set)]
+
         if matched.empty:
-            self._logger.warning(f"No users found for {file_name}")
+            all_master = master_cleaned.unique()
+            similar = []
+            for sa in clean_agencies:
+                sl = sa.lower()
+                for ma in all_master:
+                    ml = ma.lower()
+                    if sl in ml or ml in sl or any(w in ml for w in sl.split() if len(w) > 3):
+                        similar.append(f"'{ma}'")
+            if similar:
+                self._logger.warning(f"No users for {file_name} | Searched: {clean_agencies[:3]} | Similar in master: {similar[:5]}")
+            else:
+                self._logger.warning(f"No users found for {file_name} | Searched: {clean_agencies[:3]}")
             return 0
+
         assigned_indices.update(matched.index)
         safe_name = sanitize_filename(file_name)
         output_file = output_dir / (safe_name if safe_name.lower().endswith('.xlsx') else f"{safe_name}.xlsx")
@@ -1521,8 +1538,8 @@ class FileProcessor:
             df_output.to_excel(writer, sheet_name=primary_sheet, index=False)
             self.format_worksheet(writer, primary_sheet, df_output)
             self._create_pivot_summary(writer, df_output, SheetNames.USER_ACCESS_SUMMARY)
-            for agency in sorted(agencies, key=str.upper):
-                agency_match = df_output[df_output[agency_col].astype(str).str.upper() == agency.upper()]
+            for agency in sorted(clean_agencies, key=str.upper):
+                agency_match = df_output[master_cleaned.loc[df_output.index].str.upper() == agency.upper()]
                 if not agency_match.empty:
                     sname = sanitize_sheet_name(agency)
                     agency_match.to_excel(writer, sheet_name=sname, index=False)
